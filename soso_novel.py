@@ -17,6 +17,8 @@
 import os
 import urllib
 import re
+from threading import Thread
+from queue import Queue
 import requests
 from bs4 import BeautifulSoup
 
@@ -124,32 +126,6 @@ class novel_serch(object):
                 if _book_info:
                     _book_temp = {"name": _book_info.text.strip()}
                     _book_temp["href"] = _book_info["href"]
-                    # print("*******%s*********" % _book_info.text.strip())
-                    _book_about = _li.find("p", {"class": "r_cont"})
-                    if _book_about:
-                        _book_temp["about"] = _book_about.text.strip()
-                    else:
-                        _book_temp["about"] = "无简介"
-                        # print(_book_about.text.strip())
-                    """
-                    _book_last_page = _li.find("a",
-                                               {"href": re.compile("detail.*")})
-                    if _book_last_page:
-                        print(_book_last_page.text.strip())
-                    _book_last_time = _li.find("span",
-                                               {"class": "green"})
-                    if _book_last_time:
-                        print(_book_last_time.text.strip())
-                    _book_wangzhan = _li.find("span",
-                                              {"class": "grey"})
-                    if _book_wangzhan:
-                        print(_book_wangzhan.text.strip())
-                    _book_wangzh_all = _li.find("a",
-                                                {"class": "grey",
-                                                 "href": re.compile("souce.*")})
-                    if _book_wangzh_all:
-                        print(_book_wangzh_all.text.strip())
-                    """
                     self.serch_gets.append(_book_temp)
         for _page_bs in serch_bs.findAll("div", {"id": "page"}):
             """
@@ -205,51 +181,114 @@ class novel_serch(object):
         _bookdir = book["name"].replace(" ", "")
         if not os.path.exists(_bookdir):
             os.mkdir(_bookdir)
-        print("开始分析目录页")
-        _down_mulu_bs = self.internet_get(book["href"])
-        self.mulu_except(_down_mulu_bs)
-        self.page_down(book["name"])
+        self.book_mulu(book["href"])
+        self.page_downs(book["name"])
         self.bookzip(_bookdir, "%s/%s.txt" % (_bookdir, _bookdir))
+        self.bookzhengli("%s/%s.txt" % (_bookdir, _bookdir))
 
-    def page_down(self, bname):
+    def book_mulu(self, muluurl):
+        """
+        分析读取目录
+        """
+        print("开始分析目录页")
+        _mulu_bs = self.internet_get(muluurl)
+        self.mulu_except(_mulu_bs)
+
+    def page_downs(self, bname):
         """
         """
         _len = len(self.get_novel_mulu)
         _len_s = len(str(_len))
         print("开始下载%s...." % bname)
+        队列 = Queue()
         for _ll in range(_len):
             _temp_name = "%s/%s.txt" % (bname, str(_ll).rjust(_len_s, "0"))
             _temp_name = _temp_name.replace(" ", "")
-            print("下载(%s/%s)%s..." %
-                  ((_ll+1), _len, self.get_novel_mulu[_ll]["章节名"]))
-            _temp_ct = self.internet_get(self.get_novel_mulu[_ll]["href"])
-            _temp_txt = self.page_except(_temp_ct)
+            canshu = (_temp_name,
+                      self.get_novel_mulu[_ll]["href"],
+                      self.get_novel_mulu[_ll]["章节名"])
+            队列.put(canshu)
+        for i in range(5):
+            线程 = Thread(target=self.page_down, args=(i, 队列))
+            线程.setDaemon(True)
+            线程.start()
+        队列.join()
+
+    def page_down(self, i, queue):
+        while True:
+            qq = queue.get()
+            page_path = qq[0]
+            page_url = qq[1]
+            page_title = qq[2]
+            # print("这是线程%s" % i)
+            print("下载%s..." % page_title)
+            if not os.path.exists(page_path):
+                _temp_ct = self.internet_get(page_url)
+                _temp_txt, _temp_page_other = self.page_except(_temp_ct)
+                if _temp_txt:
+                    if len(_temp_txt) < 500 and _temp_page_other:
+                        _temp_txt = self.otherpage_down(_temp_page_other)
+                    _temp_txt = "%s\n%s" % (page_title, _temp_txt)
+                    with open(page_path, "w", encoding="utf8", errors="ignore"
+                              ) as h_file:
+                        h_file.write(_temp_txt)
+            # print("线程%s结束" % i)
+            queue.task_done()
+
+    def otherpage_down(self, other_page_url):
+        """
+        下载相似章节
+        """
+        _temp_txt = ""
+        if not other_page_url:
+            return
+        if self.isDebug:
+            print("相似页网址为：%s" % other_page_url)
+        _temp_ct = self.internet_get(other_page_url)
+        _other_page_list = self.otherpage_except(_temp_ct)
+        for _url in _other_page_list:
+            _temp_ct = self.internet_get(_url)
+            _temp_txt, _page_other = self.page_except(_temp_ct)
             if _temp_txt:
-                _temp_txt = "%s\n%s" % (self.get_novel_mulu[_ll]["章节名"],
-                                        _temp_txt)
-                with open(_temp_name, "w", encoding="utf8", errors="ignore"
-                          ) as h_file:
-                    h_file.write(_temp_txt)
-            """
-            """
+                if len(_temp_txt) > 500:
+                    return _temp_txt
+        return _temp_txt
+
+    def otherpage_except(self, url_other):
+        """
+        解析相似页页面,以list形式返回所有页面url
+        """
+        other_list = list()
+        for ul in url_other.findAll("ul", {"class": "mybook"}):
+            for _l in ul.findAll("li"):
+                for _a in _l.findAll("a"):
+                    other_list.append(_a["href"])
+        return other_list
 
     def page_except(self, page_bs):
         """
+        解析章节页
         """
+        _temp = ""
         _temp2_txt = ""
+        _url_other = ""
         _ct = page_bs.find("div", {"id": "tc_content"})
+        if not _ct:
+            return _temp, _url_other
         _br = _ct.findAll("br")
         [b.insert(0, "\n") for b in _br]
         _temp1 = _ct.text
         for _a in page_bs.findAll("a"):
             if "下一页" == _a.text.strip():
                 _temp2_ct = self.internet_get(_a["href"])
-                _temp2_txt = self.page_except(_temp2_ct)
+                _temp2_txt, _url_other = self.page_except(_temp2_ct)
+            if "相似章节" == _a.text.strip():
+                _url_other = _a["href"]
         if _temp2_txt:
             _temp = "%s%s" % (_temp1, _temp2_txt)
         else:
             _temp = _temp1
-        return _temp
+        return _temp, _url_other
 
     def mulu_except(self, mulu_bs):
         """
@@ -290,12 +329,14 @@ class novel_serch(object):
                 if f != bookfile and f[-4:] == ".txt":
                     _flist.append(f)
         _flist.sort()
-        # _finsh = 1
+        _all_number = len(_flist)
+        _finsh = 1
         print("开始合并%s内文件..." % bookdir)
         with open(bookfile, "w", encoding="utf8", errors="ignore") as h_file:
             for f in _flist:
-                # print("合并第%s个文件%s，剩余%s" % (_finsh, f, _all_number-_finsh))
-                # _finsh += 1
+                print("合并第%s个文件%s，剩余%s" % (_finsh, f, _all_number-_finsh),
+                      end="\r")
+                _finsh += 1
                 with open("%s/%s" % (bookdir, f),
                           "r",
                           encoding="utf8",
@@ -303,10 +344,34 @@ class novel_serch(object):
                     temp = r_file.read()
                     h_file.write(temp)
                 os.remove("%s/%s" % (bookdir, f))
+        print("")
         print("合并完成")
 
+    def bookzhengli(self, bookfile):
+        """
+        整理合并后的文件，比如去掉重复的行
+        """
+        flist = list()
+        n = 1
+        print("开始整理文件%s" % bookfile)
+        with open(bookfile, "r", encoding="utf8", errors="ignore") as h_file:
+            while True:
+                _line = h_file.readline()
+                if not _line:
+                    break
+                print("处理第%s行" % n, end="\r")
+                if _line not in flist:
+                    flist.append(_line)
+                n += 1
+        # flist = flist[:]
+        print("")
+        with open(bookfile, "w", encoding="utf8", errors="ignore") as h_file:
+            for _line in flist:
+                h_file.write(_line)
+        print("整理完成")
 
-def main():
+
+def 演示():
     aa = novel_serch()
     isExit = False
     while not isExit:
@@ -345,22 +410,15 @@ def main():
                     if _input.isalnum and int(_input) < _number:
                         _get_number = int(_input)
                         _get_book = aa.serch_gets[_get_number]
-                        _ysdown = input("是否下载:%s\n %s\n"
-                                        "直接回车下载，其他放弃:"
-                                        % (_get_book["name"],
-                                           _get_book["about"])
-                                        )
-                        if not _ysdown:
-                            aa.downbook(_get_book)
-                            isInput = False
-                            isShow = False
-                        else:
-                            continue
+                        aa.downbook(_get_book)
+                        isInput = False
+                        isShow = False
                     else:
                         print("输入序号错误，请重新输入")
-    """
-    """
 
+
+def main():
+    演示()
 
 if __name__ == "__main__":
     main()
