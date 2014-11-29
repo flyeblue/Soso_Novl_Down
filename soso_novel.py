@@ -244,11 +244,11 @@ class novel_serch(object):
                 _temp_ct = self.internet_get(page_url)
                 _temp_txt, _temp_page_other = self.page_except(_temp_ct)
                 if _temp_txt:
-                    if len(_temp_txt) < 500 and _temp_page_other:
+                    if len(_temp_txt) < 100 and _temp_page_other:
                         _temp_txt = self.otherpage_down(_temp_page_other)
-                    _temp_txt = "%s%s" % (page_title, _temp_txt)
-                    _temp_txt = _temp_txt.replace(page_title, "")
+                    _temp_txt = _temp_txt.replace(page_title.strip(), "")
                     _temp_txt = re.sub("\n\s*\n", "\n", _temp_txt)
+                    _temp_txt = "%s%s\n" % (page_title, _temp_txt)
                     with open(page_path, "w", encoding="utf8", errors="ignore"
                               ) as h_file:
                         h_file.write(_temp_txt)
